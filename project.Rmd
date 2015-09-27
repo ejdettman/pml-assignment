@@ -1,0 +1,182 @@
+Machine Learning of Self Movement
+=================================
+
+Author: edettman
+
+### Executive Summary  
+
+In this exercise, data from personal movement measurement devices was analyzed to develop a predictive model of the manner in which the individual performed. A random forest model was fitted to a training set with 5-fold cross validation using approximately 50 variables. 
+
+
+### Overview
+
+Participants lifted dumbells while wearing the movement tracking device.  
+
+#### Class variables  
+
+- exactly according to the specification (Class A) 
+- throwing the elbows to the front (Class B) 
+- lifting the dumbbell only halfway (Class C) 
+- lowering the dumbbell only halfway (Class D)
+- throwing the hips to the front (Class E)  
+
+
+
+To find a model, I loaded the training data-set into R and removed the variables associated with the timestamps, then fixed some of the columns that were changed to factors due to a 'DIV/0' value in some of those. Then, I removed the columns with greater than 95% NA values, as the not-NA values did not seem to be associated with any particular class. 
+
+
+
+
+
+
+#### Load Data
+
+```{r, warning = F, message = F}
+library(caret)
+library(ggplot2)
+library(doParallel)
+library(knitr)
+
+
+registerDoParallel(cores = 4)
+
+
+setwd('C:/practical machine learning')
+exercise <- read.csv('pml-training.csv')
+
+#cut out the timestamps
+exercise <- exercise[,c(2,7:160)]
+
+# Coerce some of the variables to numeric
+for(i in 1:155){
+      if('#DIV/0!' %in% exercise[,i]){
+            exercise[,i] <- as.numeric(as.character(exercise[,i]))
+}}
+
+
+
+
+# many of the columns are mostly NA, see if any class is more associated with the NA values
+tapply(rowSums(is.na(exercise)), exercise$classe, mean)
+
+# remove those variables with > 95% NA as they are spread across all classes 
+idx <- which(apply(exercise, 2, function(x) {
+      mean(is.na(x))
+} ) > 0.95) 
+
+exercise <- exercise[,-idx]
+
+
+```
+
+#### Many of the variables are bimodal, not associated with a specific class
+
+
+
+```{r}
+
+qplot(x = roll_forearm, data = exercise, fill = classe, alpha = I(0.5), geom = 'density') + ggtitle('Distribution of roll_forearm')
+
+```
+
+
+This makes a gaussian model based prediction method difficult to fit. Decision trees do not make assumptions about the distributions, so a random forest model should not be too affected by this non-gaussian data.  
+
+
+
+### Fit a Random Forest Model with 5 fold cross validation  
+
+
+All of the variables in the dataset were fit against the classe variable in a sub-training set containing 50% of the data. To cross-validate the model, I used the 'cv' switch with the trainControl() function from the caret package with a total of 5 folds. It's very important to use mutliple cores for this operation, as it is very slow.   
+
+```{r, message = F}
+#create subsets of the exercise data set
+set.seed(1)
+inTrain <- createDataPartition(y = exercise$classe, 
+                               p = 0.5, list = F)
+
+training <- exercise[inTrain, ]
+testing <- exercise[-inTrain,]
+
+
+modRF <- train(classe ~ ., data = training, method="rf",
+                prox = T, importance = T, allowParallel = T, 
+                trControl = trainControl(method = "cv", number=5))
+```
+
+
+#### Confusion Matrix of Random Forest Model  
+
+```{r}
+confusionMatrix(predict(modRF, training), training$classe)
+
+```
+
+
+In this model there are 500 trees and each would be very difficult to interpret. With importance = T and the importance function, we can see how much the model suffers if the variable is permuted. We see the top 10 in this measure of importance.  
+
+
+```{r}
+
+imp <- importance(modRF$finalModel, type = 1)
+
+kable(head(data.frame(decAccuracy = imp[order(imp, decreasing = T),]), n = 10), digits = 2)
+
+
+
+
+```
+
+
+### Estimated out of sample error  
+
+To estimate the out of sample error, cross validation with 5 folds was used, then the model was tested against the 50% of data that was reserved for the test set. The overall accuracy was very good, and further details are summaried in the below confusion matrix.  
+
+
+#### Out of bag error estimate With cross validation  
+
+```{r}
+
+modRF$finalModel 
+
+
+```
+
+#### Error in the earlier separated test set  
+
+```{r}
+confusionMatrix(predict(modRF, testing), testing$classe)
+
+
+```
+
+
+The accuracy is very good in the cross-validated error estimate and using the separated test set. 
+
+I made the choices of random forest with 5 fold cross validation because this model performed the best in the training set and the estimate of out of sample error was very good. Not shown here, but I tried linear discriminant analysis and trees prior to this model, but neither worked very well. The linear discriminant analysis may have been affected by the non-gaussian data variables in the data-set. The biggest downside of the model identified here is that is very slow and took a long time to fit.  
+
+
+
+
+#### Estimate values from the provided test set (Submission Portion)  
+
+```{r}
+testing2 <- read.csv('pml-testing.csv')
+
+testing2 <- testing2[,c(2,7:160)]
+
+
+for(i in 1:155){
+      if('#DIV/0!' %in% testing2[,i]){
+            testing2[,i] <- as.numeric(as.character(testing2[,i]))
+      }
+}
+
+testing2 <- testing2[, -idx]
+
+answers <- predict(modRF, testing2)
+answers
+
+```
+
+
